@@ -19,13 +19,13 @@ impl fmt::Display for ParseMessageError {
 
 impl From<num::ParseIntError> for ParseMessageError {
     fn from(err: num::ParseIntError) -> ParseMessageError {
-        ParseMessageError{ _priv: () }
+        ParseMessageError { _priv: () }
     }
 }
 
 impl From<num::ParseFloatError> for ParseMessageError {
     fn from(err: num::ParseFloatError) -> ParseMessageError {
-        ParseMessageError{ _priv: () }
+        ParseMessageError { _priv: () }
     }
 }
 
@@ -72,12 +72,12 @@ impl FromStr for StatMsg {
 
 fn parse_kind(raw: &str) -> Result<StatKind, ParseMessageError> {
     match raw {
-            "c" => Ok(StatKind::Counter),
-            "ms" => Ok(StatKind::Timer),
-            "g" => Ok(StatKind::Gauge),
-            "s" => Ok(StatKind::Sets),
-            "h" => Ok(StatKind::Histogram),
-            _ => return Err(ParseMessageError { _priv: () })
+        "c" => Ok(StatKind::Counter),
+        "ms" => Ok(StatKind::Timer),
+        "g" => Ok(StatKind::Gauge),
+        "s" => Ok(StatKind::Sets),
+        "h" => Ok(StatKind::Histogram),
+        _ => return Err(ParseMessageError { _priv: () }),
     }
 }
 
@@ -87,23 +87,22 @@ fn build_msg(parts: &Vec<&str>) -> Result<StatMsg, ParseMessageError> {
 
     if parts[1] == "delete" {
         Ok(StatMsg::Del(kind, name))
-    }
-    else {
+    } else {
         let value = try!(parts[1].parse());
-        let sr:f64 = if parts.len() > 3 && parts[3].starts_with('@') {
+        let sr: f64 = if parts.len() > 3 && parts[3].starts_with('@') {
             try!(parts[3][1..].parse())
-        }
-        else {
+        } else {
             1.0
         };
 
         match kind {
-            StatKind::Counter =>
-                Ok(StatMsg::Inc(kind, name, value, sr)),
-            StatKind::Gauge if parts[1].starts_with('+') || parts[1].starts_with('-') =>
-                Ok(StatMsg::Inc(kind, name, value, sr)),
-            StatKind::Gauge | StatKind::Timer | StatKind::Sets | StatKind::Histogram =>
+            StatKind::Counter => Ok(StatMsg::Inc(kind, name, value, sr)),
+            StatKind::Gauge if parts[1].starts_with('+') || parts[1].starts_with('-') => {
+                Ok(StatMsg::Inc(kind, name, value, sr))
+            }
+            StatKind::Gauge | StatKind::Timer | StatKind::Sets | StatKind::Histogram => {
                 Ok(StatMsg::Set(kind, name, value, sr))
+            }
         }
     }
 }
@@ -119,19 +118,18 @@ fn parse_msg(raw: &str) -> Result<StatMsg, ParseMessageError> {
         2 => {
             let name = parts[0].to_string();
             match parse_kind(parts[1]) {
-                Err(err) =>
+                Err(err) => {
                     if let Ok(value) = parts[1].parse() {
                         Ok(StatMsg::Inc(StatKind::Counter, name, value, 1.0))
+                    } else {
+                        Err(err)
                     }
-                    else { Err(err) },
-                Ok(StatKind::Counter) =>
-                    Ok(StatMsg::Inc(StatKind::Counter, name, 1, 1.0)),
-                Ok(StatKind::Gauge) =>
-                    Ok(StatMsg::Inc(StatKind::Gauge, name, 0, 1.0)),
-                Ok(kind) =>
-                    Ok(StatMsg::Set(kind, name, 0, 1.0)),
+                }
+                Ok(StatKind::Counter) => Ok(StatMsg::Inc(StatKind::Counter, name, 1, 1.0)),
+                Ok(StatKind::Gauge) => Ok(StatMsg::Inc(StatKind::Gauge, name, 0, 1.0)),
+                Ok(kind) => Ok(StatMsg::Set(kind, name, 0, 1.0)),
             }
-        },
+        }
         _ => build_msg(&parts),
     }
 }
@@ -206,11 +204,9 @@ fn test_fail_delete_no_type() {
 
 #[test]
 fn test_multi() {
-    let actual: StatMsg = "stats.counters.test:123|c|@0.5\n\
-                            stats.timers.test:123|ms|@0.75\n\
-                            stats.gauges.test:123|g\n\
-                            stats.gauges.test:-23|g\n\
-                            stats.sets.test:99|s\n"
+    let actual: StatMsg =
+        "stats.counters.test:123|c|@0.5\nstats.timers.test:123|ms|@0.75\nstats.gauges.test:\
+         123|g\nstats.gauges.test:-23|g\nstats.sets.test:99|s\n"
             .parse()
             .unwrap();
     let expected = StatMsg::Bat(vec![
