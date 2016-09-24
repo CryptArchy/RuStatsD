@@ -1,7 +1,7 @@
 use mio::*;
 use mio::udp::*;
 use std::io;
-use std::net::{SocketAddr,AddrParseError};
+use std::net::{SocketAddr, AddrParseError};
 use std::result;
 use std::str;
 use bytes::{Buf, RingBuf, MutBuf};
@@ -84,7 +84,9 @@ impl UdpReader {
                                     return;
                                 }
                                 Ok(Some((read_size, addr))) => {
-                                    unsafe { MutBuf::advance(&mut buf, read_size); }
+                                    unsafe {
+                                        MutBuf::advance(&mut buf, read_size);
+                                    }
                                     let msg = str::from_utf8(buf.bytes());
                                     info!("Result: {:?} ({:?} on {:?})", msg, read_size, addr);
                                 }

@@ -15,6 +15,7 @@ use std::process;
 use clap::{Arg, App, AppSettings};
 
 mod udp_server;
+mod metrics;
 use udp_server::*;
 
 struct UserConfiguration {
@@ -28,7 +29,7 @@ struct UserConfiguration {
 struct Bucket {
     name: String,
     value: Cell<i64>,
-    sampling_rate: Cell<f64>
+    sampling_rate: Cell<f64>,
 }
 
 fn main() {
@@ -41,7 +42,7 @@ fn main() {
     let bucket = buckets.entry("stats.counters.whatever").or_insert(0);
     *bucket += 1;
 
-    //main_tcp();
+    // main_tcp();
     let host = "127.0.0.1";
     let port = "13265";
     let mut server = UdpReader::new(&host, &port).unwrap();
@@ -111,40 +112,40 @@ fn main() {
     // let mut server = DogtownServer::new(&host, &port, &broadcast_ip);
     // server.run();
 
-    /*match state {
-        AppState { owner, is_user, repo: None, branch: None, sha: None } => {
-            let repos_url: String;
-            if is_user {
-                repos_url = user_repos_url(&owner);
-            } else {
-                repos_url = org_repos_url(&owner);
-            }
-            let response = http_get(&repos_url);
-            let repos: Vec<RepoResponse> = json::decode(&response).unwrap();
-            for repo in repos {
-                println!("{}/{}", owner, repo.name)
-            }
-        }
-        AppState { owner, is_user: _, repo: Some(repo), branch, sha: None } => {
-            let commits_url = repo_commits_url(&owner, &repo, branch);
-            let response = http_get(&commits_url);
-            let commits: Vec<RepoCommitResponse> = json::decode(&response).unwrap();
-            match commits.first() {
-                Some(commit) => handle_commit(&repo, &commit, matches.is_present("dry")),
-                None => (),
-            }
-        }
-        AppState { owner, is_user: _, repo: Some(repo), branch, sha: Some(sha) } => {
-            let commits_url = repo_commits_url(&owner, &repo, branch);
-            let response = http_get(&commits_url);
-            let commits: Vec<RepoCommitResponse> = json::decode(&response).unwrap();
-            match commits.into_iter().filter(|ref c| c.sha.starts_with(&sha)).next() {
-                Some(commit) => handle_commit(&repo, &commit, matches.is_present("dry")),
-                None => (),
-            }
-        }
-        _ => panic!("Unsupported option combination"),
-    };*/
+    // match state {
+    // AppState { owner, is_user, repo: None, branch: None, sha: None } => {
+    // let repos_url: String;
+    // if is_user {
+    // repos_url = user_repos_url(&owner);
+    // } else {
+    // repos_url = org_repos_url(&owner);
+    // }
+    // let response = http_get(&repos_url);
+    // let repos: Vec<RepoResponse> = json::decode(&response).unwrap();
+    // for repo in repos {
+    // println!("{}/{}", owner, repo.name)
+    // }
+    // }
+    // AppState { owner, is_user: _, repo: Some(repo), branch, sha: None } => {
+    // let commits_url = repo_commits_url(&owner, &repo, branch);
+    // let response = http_get(&commits_url);
+    // let commits: Vec<RepoCommitResponse> = json::decode(&response).unwrap();
+    // match commits.first() {
+    // Some(commit) => handle_commit(&repo, &commit, matches.is_present("dry")),
+    // None => (),
+    // }
+    // }
+    // AppState { owner, is_user: _, repo: Some(repo), branch, sha: Some(sha) } => {
+    // let commits_url = repo_commits_url(&owner, &repo, branch);
+    // let response = http_get(&commits_url);
+    // let commits: Vec<RepoCommitResponse> = json::decode(&response).unwrap();
+    // match commits.into_iter().filter(|ref c| c.sha.starts_with(&sha)).next() {
+    // Some(commit) => handle_commit(&repo, &commit, matches.is_present("dry")),
+    // None => (),
+    // }
+    // }
+    // _ => panic!("Unsupported option combination"),
+    // };
 }
 
 fn env_check(env_var: &str, help: &str) {
