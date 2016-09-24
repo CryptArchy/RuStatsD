@@ -3,64 +3,66 @@ use std::result;
 use std::str::{from_utf8, FromStr};
 use std::time::Duration;
 use std::fmt;
+use std::num;
 use std::vec::Vec;
 
 #[derive(Debug, Clone, PartialEq)]
-pub enum Measurement {
-    Counter {
-        name: String,
-        value: i64,
-        rate: f64,
-    },
-    Timer {
-        name: String,
-        duration: Duration,
-        rate: f64,
-    },
-    GaugeAbs {
-        name: String,
-        value: i64,
-    },
-    GaugeDelta {
-        name: String,
-        value: i64,
-    },
-    Sets {
-        name: String,
-        value: i64,
-    },
-    Multi(Vec<Measurement>),
-}
-
-#[derive(Debug, Clone, PartialEq)]
-pub struct ParseMeasurementError {
+pub struct ParseMessageError {
     _priv: (),
 }
 
-impl fmt::Display for ParseMeasurementError {
+impl fmt::Display for ParseMessageError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         "provided string was not a properly formated statsd message".fmt(f)
     }
 }
 
-impl FromStr for Measurement {
-    type Err = ParseMeasurementError;
+impl From<num::ParseIntError> for ParseMessageError {
+    fn from(err: num::ParseIntError) -> ParseMessageError {
+        ParseMessageError{ _priv: () }
+    }
+}
+
+impl From<num::ParseFloatError> for ParseMessageError {
+    fn from(err: num::ParseFloatError) -> ParseMessageError {
+        ParseMessageError{ _priv: () }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StatKind {
+    Counter,
+    Timer,
+    Gauge,
+    Sets,
+    Histogram,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StatMsg {
+    Inc(StatKind, String, i64, f64),
+    Set(StatKind, String, i64, f64),
+    Del(StatKind, String),
+    Bat(Vec<StatMsg>),
+}
+
+impl FromStr for StatMsg {
+    type Err = ParseMessageError;
     #[inline]
-    fn from_str(s: &str) -> Result<Measurement, ParseMeasurementError> {
-        let msrs: Result<Vec<_>, ParseMeasurementError> = s.split_terminator('\n')
-            .filter(|ss| !s.is_empty())
-            .map(parse_as_measure)
+    fn from_str(s: &str) -> Result<StatMsg, ParseMessageError> {
+        let msgs: Result<Vec<_>, ParseMessageError> = s.split_terminator('\n')
+            .filter(|ss| !ss.is_empty())
+            .map(parse_msg)
             .collect();
 
-        match msrs {
-            Ok(ms) => {
-                if ms.len() == 0 {
-                    Err(ParseMeasurementError { _priv: () })
-                } else if ms.len() == 1 {
-                    let first = ms[0].clone();
-                    Ok(first)
+        match msgs {
+            Ok(msg) => {
+                if msg.len() == 0 {
+                    Err(ParseMessageError { _priv: () })
+                } else if msg.len() == 1 {
+                    Ok(msg[0].clone())
                 } else {
-                    Ok(Measurement::Multi(ms))
+                    Ok(StatMsg::Bat(msg))
                 }
             }
             Err(err) => Err(err),
@@ -68,190 +70,195 @@ impl FromStr for Measurement {
     }
 }
 
-fn parse_as_measure(raw: &str) -> Result<Measurement, ParseMeasurementError> {
-    let parts: Vec<&str> = raw.split(|c| c == ':' || c == '|' || c == '@')
+fn parse_kind(raw: &str) -> Result<StatKind, ParseMessageError> {
+    match raw {
+            "c" => Ok(StatKind::Counter),
+            "ms" => Ok(StatKind::Timer),
+            "g" => Ok(StatKind::Gauge),
+            "s" => Ok(StatKind::Sets),
+            "h" => Ok(StatKind::Histogram),
+            _ => return Err(ParseMessageError { _priv: () })
+    }
+}
+
+fn build_msg(parts: &Vec<&str>) -> Result<StatMsg, ParseMessageError> {
+    let name = parts[0].to_string();
+    let kind = try!(parse_kind(parts[2]));
+
+    if parts[1] == "delete" {
+        Ok(StatMsg::Del(kind, name))
+    }
+    else {
+        let value = try!(parts[1].parse());
+        let sr:f64 = if parts.len() > 3 && parts[3].starts_with('@') {
+            try!(parts[3][1..].parse())
+        }
+        else {
+            1.0
+        };
+
+        match kind {
+            StatKind::Counter =>
+                Ok(StatMsg::Inc(kind, name, value, sr)),
+            StatKind::Gauge if parts[1].starts_with('+') || parts[1].starts_with('-') =>
+                Ok(StatMsg::Inc(kind, name, value, sr)),
+            StatKind::Gauge | StatKind::Timer | StatKind::Sets | StatKind::Histogram =>
+                Ok(StatMsg::Set(kind, name, value, sr))
+        }
+    }
+}
+
+fn parse_msg(raw: &str) -> Result<StatMsg, ParseMessageError> {
+    let parts: Vec<&str> = raw.split(|c| c == ':' || c == '|')
         .filter(|ss| !ss.is_empty())
         .collect();
-    if parts.len() >= 3 {
-        match parts[2] {
-            "c" => {
-                Ok(Measurement::Counter {
-                    name: parts[0].to_string(),
-                    value: parts[1].parse().unwrap(),
-                    rate: if parts.len() > 3 {
-                        parts[3].parse().unwrap()
-                    } else {
-                        1.0
-                    },
-                })
+
+    match parts.len() {
+        0 => Err(ParseMessageError { _priv: () }),
+        1 => Ok(StatMsg::Inc(StatKind::Counter, parts[0].to_string(), 1, 1.0)),
+        2 => {
+            let name = parts[0].to_string();
+            match parse_kind(parts[1]) {
+                Err(err) =>
+                    if let Ok(value) = parts[1].parse() {
+                        Ok(StatMsg::Inc(StatKind::Counter, name, value, 1.0))
+                    }
+                    else { Err(err) },
+                Ok(StatKind::Counter) =>
+                    Ok(StatMsg::Inc(StatKind::Counter, name, 1, 1.0)),
+                Ok(StatKind::Gauge) =>
+                    Ok(StatMsg::Inc(StatKind::Gauge, name, 0, 1.0)),
+                Ok(kind) =>
+                    Ok(StatMsg::Set(kind, name, 0, 1.0)),
             }
-            "ms" => {
-                Ok(Measurement::Timer {
-                    name: parts[0].to_string(),
-                    duration: Duration::from_millis(parts[1].parse().unwrap()),
-                    rate: if parts.len() > 3 {
-                        parts[3].parse().unwrap()
-                    } else {
-                        1.0
-                    },
-                })
-            }
-            "g" => {
-                if parts[1].starts_with('+') || parts[1].starts_with('-') {
-                    Ok(Measurement::GaugeDelta {
-                        name: parts[0].to_string(),
-                        value: parts[1].parse().unwrap(),
-                    })
-                } else {
-                    Ok(Measurement::GaugeAbs {
-                        name: parts[0].to_string(),
-                        value: parts[1].parse().unwrap(),
-                    })
-                }
-            }
-            "s" => {
-                Ok(Measurement::Sets {
-                    name: parts[0].to_string(),
-                    value: parts[1].parse().unwrap(),
-                })
-            }
-            _ => Err(ParseMeasurementError { _priv: () }),
-        }
-    } else {
-        Err(ParseMeasurementError { _priv: () })
+        },
+        _ => build_msg(&parts),
     }
 }
 
 #[test]
 fn test_counter() {
-    let actual: Measurement = "test.key:1|c".parse().unwrap();
-    let expected = Measurement::Counter {
-        name: "test.key".to_string(),
-        value: 1,
-        rate: 1.0,
-    };
+    let actual: StatMsg = "test.key:1|c".parse().unwrap();
+    let expected = StatMsg::Inc(StatKind::Counter, "test.key".to_string(), 1, 1.0);
     assert_eq!(actual, expected);
 }
 
 #[test]
 fn test_counter_with_rate() {
-    let actual: Measurement = "test.key:123|c|@0.5".parse().unwrap();
-    let expected = Measurement::Counter {
-        name: "test.key".to_string(),
-        value: 123,
-        rate: 0.5,
-    };
+    let actual: StatMsg = "test.key:123|c|@0.5".parse().unwrap();
+    let expected = StatMsg::Inc(StatKind::Counter, "test.key".to_string(), 123, 0.5);
     assert_eq!(actual, expected);
 }
 
-#[test]
 fn test_timer() {
-    let actual: Measurement = "test.key:123|ms".parse().unwrap();
-    let expected = Measurement::Timer {
-        name: "test.key".to_string(),
-        duration: Duration::from_millis(123),
-        rate: 1.0,
-    };
+    let actual: StatMsg = "test.key:123|ms".parse().unwrap();
+    let expected = StatMsg::Set(StatKind::Timer, "test.key".to_string(), 123, 1.0);
     assert_eq!(actual, expected);
 }
 
 #[test]
 fn test_timer_with_rate() {
-    let actual: Measurement = "test.key:123|ms|@0.5".parse().unwrap();
-    let expected = Measurement::Timer {
-        name: "test.key".to_string(),
-        duration: Duration::from_millis(123),
-        rate: 0.5,
-    };
+    let actual: StatMsg = "test.key:123|ms|@0.5".parse().unwrap();
+    let expected = StatMsg::Set(StatKind::Timer, "test.key".to_string(), 123, 0.5);
     assert_eq!(actual, expected);
 }
 
 #[test]
 fn test_gauge_absolute() {
-    let actual: Measurement = "test.key:123|g".parse().unwrap();
-    let expected = Measurement::GaugeAbs {
-        name: "test.key".to_string(),
-        value: 123,
-    };
+    let actual: StatMsg = "test.key:123|g".parse().unwrap();
+    let expected = StatMsg::Set(StatKind::Gauge, "test.key".to_string(), 123, 1.0);
     assert_eq!(actual, expected);
 }
 
 #[test]
 fn test_gauge_delta_pos() {
-    let actual: Measurement = "test.key:+23|g".parse().unwrap();
-    let expected = Measurement::GaugeDelta {
-        name: "test.key".to_string(),
-        value: 23,
-    };
+    let actual: StatMsg = "test.key:+23|g".parse().unwrap();
+    let expected = StatMsg::Inc(StatKind::Gauge, "test.key".to_string(), 23, 1.0);
     assert_eq!(actual, expected);
 }
 
 #[test]
 fn test_gauge_delta_neg() {
-    let actual: Measurement = "test.key:-99|g".parse().unwrap();
-    let expected = Measurement::GaugeDelta {
-        name: "test.key".to_string(),
-        value: -99,
-    };
+    let actual: StatMsg = "test.key:-99|g".parse().unwrap();
+    let expected = StatMsg::Inc(StatKind::Gauge, "test.key".to_string(), -99, 1.0);
     assert_eq!(actual, expected);
 }
 
 #[test]
-fn test_gauge_sets() {
-    let actual: Measurement = "test.key:-99|s".parse().unwrap();
-    let expected = Measurement::Sets {
-        name: "test.key".to_string(),
-        value: -99,
-    };
+fn test_sets() {
+    let actual: StatMsg = "test.key:99|s".parse().unwrap();
+    let expected = StatMsg::Set(StatKind::Sets, "test.key".to_string(), 99, 1.0);
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn test_delete() {
+    let actual: StatMsg = "test.key:delete|s".parse().unwrap();
+    let expected = StatMsg::Del(StatKind::Sets, "test.key".to_string());
+    assert_eq!(actual, expected);
+}
+
+#[test]
+#[should_panic]
+fn test_fail_delete_no_type() {
+    let actual: StatMsg = "test.key:delete".parse().unwrap();
 }
 
 #[test]
 fn test_multi() {
-    let actual: Measurement = "stats.counters.test:123|c|@0.5\n\
-                               stats.timers.test:123|ms|@0.75\n\
-                               stats.gauges.test:123|g\n\
-                               stats.gauges.test:-23|g\n\
-                               stats.sets.test:-99|s\n"
+    let actual: StatMsg = "stats.counters.test:123|c|@0.5\n\
+                            stats.timers.test:123|ms|@0.75\n\
+                            stats.gauges.test:123|g\n\
+                            stats.gauges.test:-23|g\n\
+                            stats.sets.test:99|s\n"
             .parse()
             .unwrap();
-    let expected = Measurement::Multi(vec![
-        Measurement::Counter { name:"stats.counters.test".to_string(), value:123, rate:0.5 },
-        Measurement::Timer { name:"stats.timers.test".to_string(), duration:Duration::from_millis(123), rate:0.75 },
-        Measurement::GaugeAbs { name:"stats.gauges.test".to_string(), value:123 },
-        Measurement::GaugeDelta { name:"stats.gauges.test".to_string(), value:-23 },
-        Measurement::Sets { name:"stats.sets.test".to_string(), value:-99 },
+    let expected = StatMsg::Bat(vec![
+        StatMsg::Inc(StatKind::Counter, "stats.counters.test".to_string(), 123, 0.5),
+        StatMsg::Set(StatKind::Timer, "stats.timers.test".to_string(), 123, 0.75),
+        StatMsg::Set(StatKind::Gauge, "stats.gauges.test".to_string(), 123, 1.0),
+        StatMsg::Inc(StatKind::Gauge, "stats.gauges.test".to_string(), -23, 1.0),
+        StatMsg::Set(StatKind::Sets, "stats.sets.test".to_string(), 99, 1.0),
     ]);
     assert_eq!(actual, expected);
 }
 
 #[test]
-#[should_panic]
-fn test_fail_no_type() {
-    let actual: Measurement = "test.key:1".parse().unwrap();
+fn test_only_name() {
+    let actual: StatMsg = "test.key".parse().unwrap();
+    let expected = StatMsg::Inc(StatKind::Counter, "test.key".to_string(), 1, 1.0);
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn test_no_type() {
+    let actual: StatMsg = "test.key:5".parse().unwrap();
+    let expected = StatMsg::Inc(StatKind::Counter, "test.key".to_string(), 5, 1.0);
+    assert_eq!(actual, expected);
 }
 
 #[test]
 #[should_panic]
 fn test_fail_unknown_type() {
-    let actual: Measurement = "test.key:1|x".parse().unwrap();
+    let actual: StatMsg = "test.key:1|x".parse().unwrap();
 }
 
 #[test]
-#[should_panic]
-fn test_fail_no_value() {
-    let actual: Measurement = "test.key:|c".parse().unwrap();
+fn test_no_value() {
+    let actual: StatMsg = "test.key:|g".parse().unwrap();
+    let expected = StatMsg::Inc(StatKind::Gauge, "test.key".to_string(), 0, 1.0);
+    assert_eq!(actual, expected);
 }
 
 // Metric Types
 // $KEY = metric name/bucket
 // $PCT = configured percentile thresholds for timer metrics
 // Counters = $KEY:1|c
-// $KEY:1|c|@0.1
+//            $KEY:1|c|@0.1
 // Timers   = $KEY:320|ms|@0.1
 // Gauges   = $KEY:333|g
-// $KEY:-10|g
-// $KEY:+4|g
+//            $KEY:-10|g
+//            $KEY:+4|g
 // Sets     = $KEY:765|s
 // Multi    = gorets:1|c\nglork:320|ms\ngaugor:333|g\nuniques:765|s
 //
