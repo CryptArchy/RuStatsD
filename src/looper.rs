@@ -1,66 +1,55 @@
+use mio;
 use mio::*;
-use mio::udp::*;
+use mio::channel::channel;
 use std::io;
-use std::net::{SocketAddr, AddrParseError};
 use std::result;
 use std::str;
 use bytes::{Buf, RingBuf, MutBuf};
 
-// Setup some tokens to allow us to identify which event is for which socket.
-const SERVER: Token = Token(0);
-const READ_BUFFER_SIZE: usize = 1024;
-
-#[derive(Debug)]
-pub enum UdpError {
-    Decode(str::Utf8Error),
-    Parse(AddrParseError),
-    Io(io::Error),
+pub struct LoopHandler {
+    token: Token,
+    interest: Ready,
 }
 
-impl From<str::Utf8Error> for UdpError {
-    fn from(err: str::Utf8Error) -> UdpError {
-        UdpError::Decode(err)
+impl LoopHandler {
+    pub fn can_handle(&self, token: Token, interest: Ready) -> bool {
+        self.token == token && self.interest.contains(interest)
+    }
+
+    pub fn handle(&self, interest: Ready) {
+
     }
 }
 
-impl From<AddrParseError> for UdpError {
-    fn from(err: AddrParseError) -> UdpError {
-        UdpError::Parse(err)
-    }
+
+pub struct Looper {
+    poll: Poll,
 }
 
-impl From<io::Error> for UdpError {
-    fn from(err: io::Error) -> UdpError {
-        UdpError::Io(err)
-    }
-}
+impl Looper {
+    pub fn run(poll: &Poll) {
+        let mut events = Events::with_capacity(1024);
+        loop {
+            if let Err(err) = poll.poll(&mut events, None) {
+                error!("poll.poll returned {:?}", err);
+                break;
+            }
 
-pub type Result<T> = result::Result<T, UdpError>;
+            for event in events.iter() {
 
-pub struct UdpReader {
-    address: SocketAddr,
-    socket: UdpSocket,
-}
-
-impl UdpReader {
-    pub fn new(host: &str, port: &str) -> Result<UdpReader> {
-        let connection_string = format!("{}:{}", host, port);
-        let address = try!(connection_string.parse::<SocketAddr>());
-        let socket = try!(UdpSocket::bind(&address));
-        let server = UdpReader {
-            address: address,
-            socket: socket,
-        };
-        Ok(server)
+            }
+        }
     }
 
     pub fn run(&mut self) {
         let mut poll = Poll::new().unwrap();
         let mut events = Events::with_capacity(1024);
         let mut buf = RingBuf::new(READ_BUFFER_SIZE);
+        let (tx, rx) = channel::<String>();
 
+        poll.register(&rx, RX_TOKEN, Ready::all(), PollOpt::edge()).unwrap();
         // Register the stream with `Poll`
-        poll.register(&self.socket, SERVER, Ready::all(), PollOpt::edge()).unwrap();
+        poll.register(&self.socket, INPUT_TOKEN, Ready::all(), PollOpt::edge()).unwrap();
         info!("Registered listener");
 
         loop {
@@ -72,7 +61,7 @@ impl UdpReader {
                 let tk = (event.token(), event.kind());
                 trace!("Event: {:?}", &tk);
                 match tk {
-                    (SERVER, kind) => {
+                    (INPUT_TOKEN, kind) => {
                         if kind.is_readable() {
                             match unsafe { self.socket.recv_from(buf.mut_bytes()) } {
                                 Err(e) => {
@@ -87,11 +76,16 @@ impl UdpReader {
                                     unsafe {
                                         MutBuf::advance(&mut buf, read_size);
                                     }
-                                    let msg = str::from_utf8(buf.bytes());
+                                    let msg = str::from_utf8(buf.bytes()).unwrap();
                                     info!("Result: {:?} ({:?} on {:?})", msg, read_size, addr);
+                                    tx.send(msg.to_string());
                                 }
                             };
                         }
+                    }
+                    (RX_TOKEN, kind) => {
+                        let msg = rx.try_recv().unwrap();
+                        info!("Rx: {:?}", msg);
                     }
                     _ => unreachable!(),
                 }

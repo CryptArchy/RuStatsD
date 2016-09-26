@@ -14,9 +14,11 @@ use std::io::Read;
 use std::process;
 use clap::{Arg, App, AppSettings};
 
-mod udp_server;
 mod metrics;
-use udp_server::*;
+mod frontends;
+mod backends;
+use frontends::*;
+use backends::*;
 
 struct UserConfiguration {
     owner: String,
@@ -45,8 +47,9 @@ fn main() {
     // main_tcp();
     let host = "127.0.0.1";
     let port = "13265";
-    let mut server = UdpReader::new(&host, &port).unwrap();
+    let mut server = udp_server::UdpReader::new(&host, &port).unwrap();
     server.run();
+}
 
     // env_check("INBOUND_ADDRESS", "HTTP endpoint for incoming StatsD messages");
     // env_check("OUTBOUND_ADDRESS", "HTTP endpoint for outgoing Graphite messages");
@@ -146,7 +149,6 @@ fn main() {
     // }
     // _ => panic!("Unsupported option combination"),
     // };
-}
 
 fn env_check(env_var: &str, help: &str) {
     if let Err(_) = env::var(env_var) {
